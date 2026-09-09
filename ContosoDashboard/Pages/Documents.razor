@@ -1,0 +1,589 @@
+@page "/documents"
+@using ContosoDashboard.Services
+@using ContosoDashboard.Models
+@using Microsoft.AspNetCore.Authorization
+@using System.Security.Claims
+@using System.ComponentModel.DataAnnotations
+@attribute [Authorize]
+@inject IDocumentService DocumentService
+@inject IProjectService ProjectService
+@inject IUserService UserService
+@inject AuthenticationStateProvider AuthenticationStateProvider
+
+<PageTitle>Documents - ContosoDashboard</PageTitle>
+
+<div class="container-fluid">
+    <div class="row mb-4">
+        <div class="col">
+            <h1>Documents</h1>
+        </div>
+    </div>
+
+    @* T013 [US1]: Upload form *@
+    <div class="card mb-4">
+        <div class="card-header">
+            <h5 class="mb-0">Upload a Document</h5>
+        </div>
+        <div class="card-body">
+            <EditForm Model="@uploadForm" OnValidSubmit="HandleUploadAsync">
+                <DataAnnotationsValidator />
+                <div class="row g-3">
+                    <div class="col-md-4">
+                        <label class="form-label">Title *</label>
+                        <InputText class="form-control" @bind-Value="uploadForm.Title" />
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label">Category *</label>
+                        <InputSelect class="form-select" @bind-Value="uploadForm.Category">
+                            <option value="">-- Select --</option>
+                            @foreach (var option in CategoryOptions)
+                            {
+                                <option value="@option">@option</option>
+                            }
+                        </InputSelect>
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label">Project (optional)</label>
+                        <InputSelect class="form-select" @bind-Value="uploadForm.ProjectId">
+                            <option value="0">-- Personal --</option>
+                            @foreach (var project in myProjects)
+                            {
+                                <option value="@project.ProjectId">@project.Name</option>
+                            }
+                        </InputSelect>
+                    </div>
+                    <div class="col-md-8">
+                        <label class="form-label">Description (optional)</label>
+                        <InputTextArea class="form-control" @bind-Value="uploadForm.Description" />
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label">Tags (optional)</label>
+                        <InputText class="form-control" @bind-Value="uploadForm.Tags" placeholder="comma, separated" />
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label">File *</label>
+                        <InputFile @key="@inputFileKey" OnChange="OnFileSelected" class="form-control" />
+                        <small class="text-muted">Max 25 MB. PDF, Office documents, text, JPEG, PNG.</small>
+                    </div>
+                </div>
+
+                @if (isUploading)
+                {
+                    <div class="progress mt-3" style="height: 20px;">
+                        <div class="progress-bar progress-bar-striped progress-bar-animated" style="width: 100%">
+                            Uploading...
+                        </div>
+                    </div>
+                }
+
+                @if (!string.IsNullOrEmpty(uploadMessage))
+                {
+                    <div class="alert @(uploadSucceeded ? "alert-success" : "alert-danger") mt-3">
+                        @uploadMessage
+                    </div>
+                }
+
+                <button type="submit" class="btn btn-primary mt-3" disabled="@isUploading">Upload</button>
+            </EditForm>
+        </div>
+    </div>
+
+    @* Tabs: My Documents / Shared with Me (T032 [US5]) *@
+    <ul class="nav nav-tabs mb-3">
+        <li class="nav-item">
+            <a class="nav-link @(activeTab == "mine" ? "active" : "")" href="#" @onclick="@(() => SwitchTab("mine"))" @onclick:preventDefault>
+                My Documents
+            </a>
+        </li>
+        <li class="nav-item">
+            <a class="nav-link @(activeTab == "shared" ? "active" : "")" href="#" @onclick="@(() => SwitchTab("shared"))" @onclick:preventDefault>
+                Shared with Me
+            </a>
+        </li>
+    </ul>
+
+    @if (activeTab == "mine")
+    {
+        @* T020 [US2]: search/sort/filter controls *@
+        <div class="row mb-3 g-2">
+            <div class="col-md-4">
+                <input class="form-control" placeholder="Search title, description, tags, uploader, project..."
+                       @bind="searchQuery" @bind:event="oninput" @onkeyup="HandleSearchKeyUpAsync" />
+            </div>
+            <div class="col-md-2">
+                <select class="form-select" @bind="sortBy" @bind:after="LoadMyDocumentsAsync">
+                    <option value="">Sort: Upload date</option>
+                    <option value="title">Sort: Title</option>
+                    <option value="category">Sort: Category</option>
+                    <option value="fileSize">Sort: File size</option>
+                </select>
+            </div>
+            <div class="col-md-2">
+                <select class="form-select" @bind="filterCategory" @bind:after="LoadMyDocumentsAsync">
+                    <option value="">All categories</option>
+                    @foreach (var option in CategoryOptions)
+                    {
+                        <option value="@option">@option</option>
+                    }
+                </select>
+            </div>
+        </div>
+
+        @if (isSearching)
+        {
+            <p class="text-muted"><em>Searching...</em></p>
+        }
+        else if (displayedDocuments == null || !displayedDocuments.Any())
+        {
+            <p class="text-muted">No documents found.</p>
+        }
+        else
+        {
+            <div class="table-responsive">
+                <table class="table table-hover">
+                    <thead>
+                        <tr>
+                            <th>Title</th>
+                            <th>Category</th>
+                            <th>Project</th>
+                            <th>Uploaded</th>
+                            <th>Size</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var doc in displayedDocuments)
+                        {
+                            <tr>
+                                <td>
+                                    <strong>@doc.Title</strong>
+                                    @if (!string.IsNullOrEmpty(doc.Description))
+                                    {
+                                        <br /><small class="text-muted">@doc.Description</small>
+                                    }
+                                </td>
+                                <td>@doc.Category</td>
+                                <td>@(doc.Project?.Name ?? "Personal")</td>
+                                <td>@doc.UploadedDate.ToString("MMM dd, yyyy")</td>
+                                <td>@FormatFileSize(doc.FileSizeBytes)</td>
+                                <td>
+                                    <a class="btn btn-sm btn-outline-primary me-1" href="@($"/documents/{doc.DocumentId}/download")" target="_blank">Download</a>
+                                    @if (DocumentFileTypes.IsPreviewable(doc.FileName))
+                                    {
+                                        <a class="btn btn-sm btn-outline-secondary me-1" href="@($"/documents/{doc.DocumentId}/preview")" target="_blank">Preview</a>
+                                    }
+                                    @if (doc.UploadedByUserId == currentUserId)
+                                    {
+                                        <button class="btn btn-sm btn-outline-secondary me-1" @onclick="@(() => StartEdit(doc))">Edit</button>
+                                        <button class="btn btn-sm btn-outline-secondary me-1" @onclick="@(() => StartShareAsync(doc))">Share</button>
+                                        <button class="btn btn-sm btn-outline-danger" @onclick="@(() => DeleteAsync(doc))">Delete</button>
+                                    }
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+    }
+    else
+    {
+        @if (sharedDocuments == null || !sharedDocuments.Any())
+        {
+            <p class="text-muted">No documents have been shared with you.</p>
+        }
+        else
+        {
+            <div class="table-responsive">
+                <table class="table table-hover">
+                    <thead>
+                        <tr>
+                            <th>Title</th>
+                            <th>Category</th>
+                            <th>Uploaded By</th>
+                            <th>Uploaded</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var doc in sharedDocuments)
+                        {
+                            <tr>
+                                <td>@doc.Title</td>
+                                <td>@doc.Category</td>
+                                <td>@doc.UploadedByUser.DisplayName</td>
+                                <td>@doc.UploadedDate.ToString("MMM dd, yyyy")</td>
+                                <td>
+                                    <a class="btn btn-sm btn-outline-primary me-1" href="@($"/documents/{doc.DocumentId}/download")" target="_blank">Download</a>
+                                    @if (DocumentFileTypes.IsPreviewable(doc.FileName))
+                                    {
+                                        <a class="btn btn-sm btn-outline-secondary" href="@($"/documents/{doc.DocumentId}/preview")" target="_blank">Preview</a>
+                                    }
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+    }
+</div>
+
+@* T028 [US4]: edit-metadata / replace-file modal *@
+@if (editingDocument != null)
+{
+    <div class="modal d-block" tabindex="-1" style="background: rgba(0,0,0,0.5);">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">Edit Document</h5>
+                    <button type="button" class="btn-close" @onclick="CancelEdit"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label class="form-label">Title</label>
+                        <input class="form-control" @bind="editForm.Title" />
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Description</label>
+                        <textarea class="form-control" @bind="editForm.Description"></textarea>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Category</label>
+                        <select class="form-select" @bind="editForm.Category">
+                            @foreach (var option in CategoryOptions)
+                            {
+                                <option value="@option">@option</option>
+                            }
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Tags</label>
+                        <input class="form-control" @bind="editForm.Tags" />
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Replace file (optional)</label>
+                        <InputFile @key="@replaceFileKey" OnChange="OnReplaceFileSelected" class="form-control" />
+                    </div>
+                    @if (!string.IsNullOrEmpty(editMessage))
+                    {
+                        <div class="alert alert-danger">@editMessage</div>
+                    }
+                </div>
+                <div class="modal-footer">
+                    <button class="btn btn-secondary" @onclick="CancelEdit">Cancel</button>
+                    <button class="btn btn-primary" @onclick="SaveEditAsync">Save</button>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+@* T032 [US5]: share modal *@
+@if (sharingDocument != null)
+{
+    <div class="modal d-block" tabindex="-1" style="background: rgba(0,0,0,0.5);">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">Share "@sharingDocument.Title"</h5>
+                    <button type="button" class="btn-close" @onclick="CancelShare"></button>
+                </div>
+                <div class="modal-body">
+                    <label class="form-label">Share with</label>
+                    <select class="form-select" @bind="shareWithUserId">
+                        <option value="0">-- Select a user --</option>
+                        @foreach (var user in allUsers.Where(u => u.UserId != currentUserId))
+                        {
+                            <option value="@user.UserId">@user.DisplayName</option>
+                        }
+                    </select>
+                    @if (!string.IsNullOrEmpty(shareMessage))
+                    {
+                        <div class="alert alert-danger mt-2">@shareMessage</div>
+                    }
+                </div>
+                <div class="modal-footer">
+                    <button class="btn btn-secondary" @onclick="CancelShare">Cancel</button>
+                    <button class="btn btn-primary" @onclick="ConfirmShareAsync">Share</button>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    private static readonly string[] CategoryOptions =
+    {
+        "Project Documents", "Team Resources", "Personal Files", "Reports", "Presentations", "Other"
+    };
+
+    private int currentUserId;
+    private List<Project> myProjects = new();
+    private List<User> allUsers = new();
+
+    private string activeTab = "mine";
+    private List<Document>? myDocuments;
+    private List<Document>? searchResults;
+    private List<Document>? sharedDocuments;
+    private List<Document>? displayedDocuments => !string.IsNullOrWhiteSpace(searchQuery) ? searchResults : myDocuments;
+
+    private string sortBy = "";
+    private string filterCategory = "";
+    private string searchQuery = "";
+    private bool isSearching;
+
+    private UploadFormModel uploadForm = new();
+    private IBrowserFile? selectedFile;
+    private bool isUploading;
+    private string? uploadMessage;
+    private bool uploadSucceeded;
+    private Guid inputFileKey = Guid.NewGuid();
+
+    private Document? editingDocument;
+    private EditFormModel editForm = new();
+    private IBrowserFile? replaceFile;
+    private string? editMessage;
+    private Guid replaceFileKey = Guid.NewGuid();
+
+    private Document? sharingDocument;
+    private int shareWithUserId;
+    private string? shareMessage;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var authState = await AuthenticationStateProvider.GetAuthenticationStateAsync();
+        var userIdClaim = authState.User.FindFirst(ClaimTypes.NameIdentifier);
+        if (userIdClaim != null && int.TryParse(userIdClaim.Value, out int userId))
+        {
+            currentUserId = userId;
+        }
+
+        if (currentUserId > 0)
+        {
+            myProjects = await ProjectService.GetUserProjectsAsync(currentUserId);
+            await LoadMyDocumentsAsync();
+            sharedDocuments = await DocumentService.GetSharedWithMeAsync(currentUserId);
+        }
+    }
+
+    private async Task LoadMyDocumentsAsync()
+    {
+        int? projectId = null; // filter-by-project control is not included in this pass (not required by FR-008's minimum set beyond category/project/date; project filter can reuse the same pattern later if requested)
+        myDocuments = await DocumentService.GetMyDocumentsAsync(currentUserId, sortBy,
+            string.IsNullOrEmpty(filterCategory) ? null : filterCategory, projectId);
+    }
+
+    private async Task HandleSearchKeyUpAsync()
+    {
+        if (string.IsNullOrWhiteSpace(searchQuery))
+        {
+            searchResults = null;
+            return;
+        }
+
+        isSearching = true;
+        StateHasChanged();
+        searchResults = await DocumentService.SearchDocumentsAsync(searchQuery, currentUserId);
+        isSearching = false;
+    }
+
+    private void SwitchTab(string tab) => activeTab = tab;
+
+    private void OnFileSelected(InputFileChangeEventArgs e)
+    {
+        selectedFile = e.File;
+    }
+
+    private async Task HandleUploadAsync()
+    {
+        uploadMessage = null;
+
+        if (selectedFile == null)
+        {
+            uploadMessage = "Please select a file.";
+            uploadSucceeded = false;
+            return;
+        }
+
+        // Blazor Server upload pattern per StakeholderDocs: extract metadata into locals BEFORE
+        // opening the stream, copy to a MemoryStream immediately, then clear the IBrowserFile
+        // reference to avoid disposal/reuse issues.
+        var fileName = selectedFile.Name;
+        var fileSize = selectedFile.Size;
+        var contentType = selectedFile.ContentType;
+
+        isUploading = true;
+        StateHasChanged();
+
+        try
+        {
+            using var memoryStream = new MemoryStream();
+            using (var fileStream = selectedFile.OpenReadStream(maxAllowedSize: 25 * 1024 * 1024))
+            {
+                await fileStream.CopyToAsync(memoryStream);
+            }
+            memoryStream.Position = 0;
+
+            selectedFile = null; // clear reference to prevent reuse
+            inputFileKey = Guid.NewGuid(); // force InputFile re-render after upload
+
+            var projectId = uploadForm.ProjectId > 0 ? uploadForm.ProjectId : (int?)null;
+
+            await DocumentService.UploadAsync(memoryStream, fileName, fileSize, contentType,
+                uploadForm.Title, uploadForm.Description, uploadForm.Category, projectId,
+                uploadForm.Tags, currentUserId);
+
+            uploadMessage = "Document uploaded successfully.";
+            uploadSucceeded = true;
+            uploadForm = new UploadFormModel();
+            await LoadMyDocumentsAsync();
+        }
+        catch (Exception ex)
+        {
+            uploadMessage = ex.Message;
+            uploadSucceeded = false;
+        }
+        finally
+        {
+            isUploading = false;
+        }
+    }
+
+    // T028 [US4]: edit metadata
+    private void StartEdit(Document doc)
+    {
+        editingDocument = doc;
+        editForm = new EditFormModel
+        {
+            Title = doc.Title,
+            Description = doc.Description,
+            Category = doc.Category,
+            Tags = doc.Tags
+        };
+        editMessage = null;
+    }
+
+    private void CancelEdit()
+    {
+        editingDocument = null;
+        replaceFile = null;
+    }
+
+    private void OnReplaceFileSelected(InputFileChangeEventArgs e)
+    {
+        replaceFile = e.File;
+    }
+
+    private async Task SaveEditAsync()
+    {
+        if (editingDocument == null) return;
+        editMessage = null;
+
+        try
+        {
+            if (replaceFile != null)
+            {
+                var fileName = replaceFile.Name;
+                var fileSize = replaceFile.Size;
+                var contentType = replaceFile.ContentType;
+
+                using var memoryStream = new MemoryStream();
+                using (var fileStream = replaceFile.OpenReadStream(maxAllowedSize: 25 * 1024 * 1024))
+                {
+                    await fileStream.CopyToAsync(memoryStream);
+                }
+                memoryStream.Position = 0;
+                replaceFile = null;
+                replaceFileKey = Guid.NewGuid();
+
+                await DocumentService.ReplaceFileAsync(editingDocument.DocumentId, memoryStream, fileName,
+                    fileSize, contentType, currentUserId);
+            }
+
+            await DocumentService.UpdateMetadataAsync(editingDocument.DocumentId, editForm.Title,
+                editForm.Description, editForm.Category, editForm.Tags, currentUserId);
+
+            editingDocument = null;
+            await LoadMyDocumentsAsync();
+        }
+        catch (Exception ex)
+        {
+            editMessage = ex.Message;
+        }
+    }
+
+    // T027/T028 [US4]: permanent delete only (no soft delete/trash — out of scope)
+    private async Task DeleteAsync(Document doc)
+    {
+        var deleted = await DocumentService.DeleteDocumentAsync(doc.DocumentId, currentUserId);
+        if (deleted)
+        {
+            await LoadMyDocumentsAsync();
+        }
+    }
+
+    // T032 [US5]: share
+    private async Task StartShareAsync(Document doc)
+    {
+        sharingDocument = doc;
+        shareWithUserId = 0;
+        shareMessage = null;
+        if (!allUsers.Any())
+        {
+            // Reuse the existing all-users listing already used by the Login page's dropdown.
+            allUsers = await UserService.GetAllUsersAsync();
+        }
+    }
+
+    private void CancelShare()
+    {
+        sharingDocument = null;
+    }
+
+    private async Task ConfirmShareAsync()
+    {
+        if (sharingDocument == null || shareWithUserId == 0)
+        {
+            shareMessage = "Please select a user.";
+            return;
+        }
+
+        var shared = await DocumentService.ShareDocumentAsync(sharingDocument.DocumentId, shareWithUserId, currentUserId);
+        if (shared)
+        {
+            sharingDocument = null;
+        }
+        else
+        {
+            shareMessage = "Unable to share this document (it may already be shared with that user).";
+        }
+    }
+
+    private static string FormatFileSize(long bytes)
+    {
+        if (bytes >= 1024 * 1024) return $"{bytes / (1024.0 * 1024.0):F1} MB";
+        if (bytes >= 1024) return $"{bytes / 1024.0:F1} KB";
+        return $"{bytes} B";
+    }
+
+    public class UploadFormModel
+    {
+        [Required]
+        public string Title { get; set; } = string.Empty;
+
+        [Required]
+        public string Category { get; set; } = string.Empty;
+        public string? Description { get; set; }
+        public string? Tags { get; set; }
+        public int ProjectId { get; set; }
+    }
+
+    public class EditFormModel
+    {
+        public string Title { get; set; } = string.Empty;
+        public string? Description { get; set; }
+        public string Category { get; set; } = string.Empty;
+        public string? Tags { get; set; }
+    }
+}

@@ -1,0 +1,106 @@
+@page "/documents/reports"
+@using ContosoDashboard.Services
+@using Microsoft.AspNetCore.Authorization
+@attribute [Authorize(Policy = "Administrator")]
+@inject IDocumentService DocumentService
+
+<PageTitle>Document Activity Reports - ContosoDashboard</PageTitle>
+
+<div class="container-fluid">
+    <div class="row mb-4">
+        <div class="col">
+            <h1>Document Activity Reports</h1>
+            <p class="text-muted">Administrator-only reporting on document uploads, downloads, deletions, and shares (FR-022).</p>
+        </div>
+    </div>
+
+    @if (report == null)
+    {
+        <p><em>Loading...</em></p>
+    }
+    else
+    {
+        <div class="row">
+            <div class="col-md-4 mb-4">
+                <div class="card">
+                    <div class="card-header"><h5 class="mb-0">Most Uploaded Document Types</h5></div>
+                    <div class="card-body">
+                        @if (!report.MostUploadedTypes.Any())
+                        {
+                            <p class="text-muted">No documents uploaded yet.</p>
+                        }
+                        else
+                        {
+                            <ul class="list-group list-group-flush">
+                                @foreach (var item in report.MostUploadedTypes)
+                                {
+                                    <li class="list-group-item d-flex justify-content-between">
+                                        <span>@item.FileType</span>
+                                        <span class="badge bg-primary rounded-pill">@item.Count</span>
+                                    </li>
+                                }
+                            </ul>
+                        }
+                    </div>
+                </div>
+            </div>
+
+            <div class="col-md-4 mb-4">
+                <div class="card">
+                    <div class="card-header"><h5 class="mb-0">Most Active Uploaders</h5></div>
+                    <div class="card-body">
+                        @if (!report.MostActiveUploaders.Any())
+                        {
+                            <p class="text-muted">No documents uploaded yet.</p>
+                        }
+                        else
+                        {
+                            <ul class="list-group list-group-flush">
+                                @foreach (var item in report.MostActiveUploaders)
+                                {
+                                    <li class="list-group-item d-flex justify-content-between">
+                                        <span>@item.DisplayName</span>
+                                        <span class="badge bg-primary rounded-pill">@item.Count</span>
+                                    </li>
+                                }
+                            </ul>
+                        }
+                    </div>
+                </div>
+            </div>
+
+            <div class="col-md-4 mb-4">
+                <div class="card">
+                    <div class="card-header"><h5 class="mb-0">Document Access Patterns</h5></div>
+                    <div class="card-body">
+                        @if (!report.AccessPatterns.Any())
+                        {
+                            <p class="text-muted">No document activity recorded yet.</p>
+                        }
+                        else
+                        {
+                            <ul class="list-group list-group-flush">
+                                @foreach (var item in report.AccessPatterns)
+                                {
+                                    <li class="list-group-item d-flex justify-content-between">
+                                        <span>@item.ActionType</span>
+                                        <span class="badge bg-secondary rounded-pill">@item.Count</span>
+                                    </li>
+                                }
+                            </ul>
+                        }
+                    </div>
+                </div>
+            </div>
+        </div>
+    }
+</div>
+
+@code {
+    private DocumentActivityReport? report;
+
+    protected override async Task OnInitializedAsync()
+    {
+        report = await DocumentService.GetDocumentActivityReportAsync();
+    }
+}
